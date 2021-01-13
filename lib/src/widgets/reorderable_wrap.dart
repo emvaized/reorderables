@@ -9,11 +9,9 @@ import 'package:flutter/rendering.dart';
 import 'package:reorderables/reorderables.dart';
 
 import './passthrough_overlay.dart';
-
 //import './transitions.dart';
 import './typedefs.dart';
 import './wrap.dart';
-
 //import './transitions.dart';
 import '../rendering/wrap.dart';
 import 'reorderable_mixin.dart';
@@ -40,6 +38,7 @@ class ReorderableWrap extends StatefulWidget {
     this.header,
     this.footer,
     this.controller,
+    this.physics,
     @required this.children,
     @required this.onReorder,
     this.direction = Axis.horizontal,
@@ -59,9 +58,7 @@ class ReorderableWrap extends StatefulWidget {
     this.maxMainAxisCount,
     this.onNoReorder,
     this.onReorderStarted,
-    this.reorderAnimationDuration,
-    this.scrollAnimationDuration,
-    this.ignorePrimaryScrollController = false,
+    this.onDragCancelledCallback
   })  : assert(direction != null),
         assert(onReorder != null),
         assert(children != null),
@@ -71,16 +68,19 @@ class ReorderableWrap extends StatefulWidget {
 //        ),
         super(key: key);
 
+  final Function onDragCancelledCallback;
+
   /// A non-reorderable header widget to show before the list.
   ///
   /// If null, no header will appear before the list.
-  final List<Widget> header;
+  final Widget header;
   final Widget footer;
 
   /// A custom scroll [controller].
   /// To control the initial scroll offset of the scroll view, provide a
   /// [controller] with its [ScrollController.initialScrollOffset] property set.
   final ScrollController controller;
+  final ScrollPhysics physics;
 
   /// The widgets to display.
   final List<Widget> children;
@@ -238,9 +238,6 @@ class ReorderableWrap extends StatefulWidget {
 
   final int minMainAxisCount;
   final int maxMainAxisCount;
-  final Duration reorderAnimationDuration;
-  final Duration scrollAnimationDuration;
-  final bool ignorePrimaryScrollController;
 
   @override
   _ReorderableWrapState createState() => _ReorderableWrapState();
@@ -292,8 +289,8 @@ class _ReorderableWrapState extends State<ReorderableWrap> {
           minMainAxisCount: widget.minMainAxisCount,
           maxMainAxisCount: widget.maxMainAxisCount,
           controller: widget.controller,
-          reorderAnimationDuration: widget.reorderAnimationDuration,
-          scrollAnimationDuration: widget.scrollAnimationDuration,
+            physics: widget.physics ?? ClampingScrollPhysics(),
+            onDragCancelledCallback: widget.onDragCancelledCallback
         );
       },
     );
@@ -301,14 +298,11 @@ class _ReorderableWrapState extends State<ReorderableWrap> {
 
   @override
   Widget build(BuildContext context) {
-    final PassthroughOverlay passthroughOverlay = PassthroughOverlay(
+    return PassthroughOverlay(
         key: _overlayKey,
         initialEntries: <PassthroughOverlayEntry>[
           _listOverlayEntry,
         ]);
-    return widget.ignorePrimaryScrollController
-        ? PrimaryScrollController.none(child: passthroughOverlay)
-        : passthroughOverlay;
   }
 }
 
@@ -322,6 +316,7 @@ class _ReorderableWrapContent extends StatefulWidget {
     @required this.children,
     @required this.direction,
     @required this.scrollDirection,
+    @required this.physics,
     @required this.padding,
     @required this.onReorder,
     @required this.onNoReorder,
@@ -338,20 +333,21 @@ class _ReorderableWrapContent extends StatefulWidget {
     @required this.verticalDirection,
     @required this.minMainAxisCount,
     @required this.maxMainAxisCount,
-    this.reorderAnimationDuration = const Duration(milliseconds: 200),
-    this.scrollAnimationDuration = const Duration(milliseconds: 200),
+    @required this.onDragCancelledCallback,
   });
 
-  final List<Widget> header;
+  final Widget header;
   final Widget footer;
   final ScrollController controller;
   final List<Widget> children;
   final Axis direction;
   final Axis scrollDirection;
+  final ScrollPhysics physics;
   final EdgeInsets padding;
   final ReorderCallback onReorder;
   final NoReorderCallback onNoReorder;
   final ReorderStartedCallback onReorderStarted;
+  final Function onDragCancelledCallback;
   final BuildItemsContainer buildItemsContainer;
   final BuildDraggableFeedback buildDraggableFeedback;
   final bool needsLongPressDraggable;
@@ -365,8 +361,6 @@ class _ReorderableWrapContent extends StatefulWidget {
   final VerticalDirection verticalDirection;
   final int minMainAxisCount;
   final int maxMainAxisCount;
-  final Duration reorderAnimationDuration;
-  final Duration scrollAnimationDuration;
 
   @override
   _ReorderableWrapContentState createState() => _ReorderableWrapContentState();
@@ -385,11 +379,11 @@ class _ReorderableWrapContentState extends State<_ReorderableWrapContent>
   static const double _dropAreaMargin = 0.0;
 
   // How long an animation to reorder an element in the list takes.
-  Duration _reorderAnimationDuration;
+  static const Duration _reorderAnimationDuration = Duration(milliseconds: 200);
 
   // How long an animation to scroll to an off-screen element in the
   // list takes.
-  Duration _scrollAnimationDuration;
+  static const Duration _scrollAnimationDuration = Duration(milliseconds: 200);
 
   // Controls scrolls and measures scroll progress.
   ScrollController _scrollController;
@@ -409,7 +403,6 @@ class _ReorderableWrapContentState extends State<_ReorderableWrapContent>
 
   // The last computed size of the feedback widget being dragged.
   Size _draggingFeedbackSize;
-
 //  List<GlobalObjectKey> _childKeys;
   List<BuildContext> _childContexts;
   List<Size> _childSizes;
@@ -459,8 +452,6 @@ class _ReorderableWrapContentState extends State<_ReorderableWrapContent>
   @override
   void initState() {
     super.initState();
-    _reorderAnimationDuration = widget.reorderAnimationDuration;
-    _scrollAnimationDuration = widget.scrollAnimationDuration;
     _entranceController = AnimationController(
         value: 1.0, vsync: this, duration: _reorderAnimationDuration);
     _ghostController = AnimationController(
@@ -481,9 +472,8 @@ class _ReorderableWrapContentState extends State<_ReorderableWrapContent>
 
   @override
   void didChangeDependencies() {
-    _scrollController = widget.controller ??
-        PrimaryScrollController.of(context) ??
-        ScrollController();
+    _scrollController = 
+        widget.controller ?? (PrimaryScrollController.of(context) ?? ScrollController());
     super.didChangeDependencies();
   }
 
@@ -543,6 +533,7 @@ class _ReorderableWrapContentState extends State<_ReorderableWrapContent>
     );
     final bool onScreen =
         scrollOffset <= topOffset && scrollOffset >= bottomOffset;
+
     // If the context is off screen, then we request a scroll to make it visible.
     if (!onScreen) {
       _scrolling = true;
@@ -690,6 +681,21 @@ class _ReorderableWrapContentState extends State<_ReorderableWrapContent>
       });
     }
 
+    void onDragCancelled(Velocity velocity, Offset offset) {
+      if (widget.onDragCancelledCallback != null) {
+        widget.onDragCancelledCallback(velocity, offset);
+      }
+
+      setState(() {
+        _reorder(_dragStartIndex, _currentDisplayIndex);
+        _dragStartIndex = -1;
+        _ghostDisplayIndex = -1;
+        _currentDisplayIndex = -1;
+        _nextDisplayIndex = -1;
+        _draggingWidget = null;
+      });
+    }
+
     // Drops toWrap into the last position it was hovering over.
     void onDragEnded() {
 //      reorder(_dragStartIndex, _currentIndex);
@@ -773,21 +779,11 @@ class _ReorderableWrapContentState extends State<_ReorderableWrapContent>
     }
 
     Widget _makeAppearingWidget(Widget child) {
-      return makeAppearingWidget(
-        child,
-        _entranceController,
-        null,
-        widget.direction,
-      );
+      return makeAppearingWidget(child, _entranceController, null, widget.direction,);
     }
 
     Widget _makeDisappearingWidget(Widget child) {
-      return makeDisappearingWidget(
-        child,
-        _ghostController,
-        null,
-        widget.direction,
-      );
+      return makeDisappearingWidget(child, _ghostController, null, widget.direction,);
     }
 
     //Widget buildDragTarget(BuildContext context, List<Key> acceptedCandidates, List<dynamic> rejectedCandidates) {
@@ -818,8 +814,7 @@ class _ReorderableWrapContentState extends State<_ReorderableWrapContent>
         child = this.widget.needsLongPressDraggable
             ? LongPressDraggable<int>(
                 maxSimultaneousDrags: 1,
-                data: index,
-                //toWrap.key,
+                data: index, //toWrap.key,
                 ignoringFeedbackSemantics: false,
                 feedback: feedbackBuilder,
                 // Wrap toWrapWithSemantics with a widget that supports HitTestBehavior
@@ -843,13 +838,14 @@ class _ReorderableWrapContentState extends State<_ReorderableWrapContent>
                 // When the drag does not end inside a DragTarget widget, the
                 // drag fails, but we still reorder the widget to the last position it
                 // had been dragged to.
-                onDraggableCanceled: (Velocity velocity, Offset offset) =>
-                    onDragEnded(),
+                // onDraggableCanceled: (Velocity velocity, Offset offset) =>
+                //     onDragEnded(),
+          onDraggableCanceled: (Velocity velocity, Offset offset) =>
+              onDragCancelled(velocity, offset),
               )
             : Draggable<int>(
                 maxSimultaneousDrags: 1,
-                data: index,
-                //toWrap.key,
+                data: index, //toWrap.key,
                 ignoringFeedbackSemantics: false,
                 feedback: feedbackBuilder,
                 child: MetaData(
@@ -865,8 +861,10 @@ class _ReorderableWrapContentState extends State<_ReorderableWrapContent>
                 dragAnchor: DragAnchor.child,
                 onDragStarted: onDragStarted,
                 onDragCompleted: onDragEnded,
-                onDraggableCanceled: (Velocity velocity, Offset offset) =>
-                    onDragEnded(),
+                // onDraggableCanceled: (Velocity velocity, Offset offset) =>
+                //     onDragEnded(),
+          onDraggableCanceled: (Velocity velocity, Offset offset) =>
+              onDragCancelled(velocity, offset),
               );
       }
 
@@ -1204,26 +1202,21 @@ class _ReorderableWrapContentState extends State<_ReorderableWrapContent>
           _currentDisplayIndex, wrappedChildren.removeAt(_dragStartIndex));
     }
     if (widget.header != null) {
-      wrappedChildren.insertAll(0, widget.header);
+      wrappedChildren.insert(0, widget.header);
     }
     if (widget.footer != null) {
       wrappedChildren.add(widget.footer);
     }
 
-    if (widget.controller != null &&
-        PrimaryScrollController.of(context) == null) {
-      return (widget.buildItemsContainer ?? defaultBuildItemsContainer)(
-          context, widget.direction, wrappedChildren);
-    } else {
-      return SingleChildScrollView(
+    return SingleChildScrollView(
 //      key: _contentKey,
-        scrollDirection: widget.scrollDirection,
-        child: (widget.buildItemsContainer ?? defaultBuildItemsContainer)(
-            context, widget.direction, wrappedChildren),
-        padding: widget.padding,
-        controller: _scrollController,
-      );
-    }
+      scrollDirection: widget.scrollDirection,
+      child: (widget.buildItemsContainer ?? defaultBuildItemsContainer)(
+          context, widget.direction, wrappedChildren),
+      padding: widget.padding,
+      controller: _scrollController,
+      physics: widget.physics,
+    );
 //    });
   }
 
